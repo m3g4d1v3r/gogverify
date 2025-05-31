@@ -67,6 +67,12 @@ def compute_md5(path, chunk_size=4096):
             h.update(chunk)
     return h.hexdigest()
 
+def compute_sha256(path, chunk_size=4096):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(chunk_size), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 def download_json(url, use_zlib=False):
     try:
@@ -82,7 +88,7 @@ def download_json(url, use_zlib=False):
     return json.loads(data.decode("utf-8"))
 
 
-FileInfo = namedtuple("FileInfo", ("path", "md5", "is_dir"))
+FileInfo = namedtuple("FileInfo", ("path", "md5", "sha256", "is_dir"))
 
 
 def get_files(game_id, build_id, os, language):
@@ -101,6 +107,7 @@ def get_files(game_id, build_id, os, language):
             continue
 
         manifest = depot["manifest"]
+        print(f"https://cdn.gog.com/content-system/v2/meta/{manifest[:2]}/{manifest[2:4]}/{manifest}")
         depot_files = download_json(f"https://cdn.gog.com/content-system/v2/meta/{manifest[:2]}/{manifest[2:4]}/{manifest}", use_zlib=True)
         for item in depot_files["depot"]["items"]:
             path = str(Path({"windows": PureWindowsPath, "osx": PurePosixPath}[os](item["path"])))
@@ -108,13 +115,16 @@ def get_files(game_id, build_id, os, language):
                 files.append(FileInfo(path, None, True))
             else:
                 chunks = item["chunks"]
+                sha256 = None
+                if "sha256" in item:
+                    sha256 = item["sha256"]
                 if len(chunks) > 1:
                     md5 = item["md5"]
                 elif len(chunks) == 1:
                     md5 = chunks[0]["md5"]
                 else:
                     md5 = hashlib.md5(b"").hexdigest()
-                files.append(FileInfo(path, md5, False))
+                files.append(FileInfo(path, md5, sha256, False))
 
     return files
 
@@ -183,8 +193,21 @@ def main():
                     msg = "Not a file"
                 else:
                     md5 = compute_md5(local_path)
+                    sha256 = compute_sha256(local_path)
+                    md5_flag = False
+                    sha256_flag = False
                     if md5 != file.md5:
+                        md5_flag = True
+                    if file.sha256 is not None:
+                        if sha256 != file.sha256:
+                            sha256_flag = True
+
+                    if md5_flag and sha256_flag:
+                        msg = f"MD5 and SHA256 mismatch. MD5 ({md5}), SHA256 ({sha256})"
+                    elif md5_flag:
                         msg = f"MD5 mismatch ({md5})"
+                    elif sha256_flag:
+                        msg = f"SHA256 mismatch ({sha256})"
         if msg != "OK":
             errors.append((file.path, msg))
         
